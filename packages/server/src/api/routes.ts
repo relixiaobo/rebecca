@@ -55,8 +55,8 @@ export function createRoutes(
   interface PostOptions {
     /** Atomically delete this pending mention when the message is inserted. */
     clearPendingMention?: { participantId: string; messageId: string };
-    /** Subset of `mentions` that should be handled in quick mode. */
-    quickMentions?: string[];
+    /** Invocation mode for all mentions in this message. */
+    mode?: "full" | "quick";
   }
 
   // Internal post: used by both HTTP route and AgentManager
@@ -70,10 +70,7 @@ export function createRoutes(
     const msgId = crypto.randomUUID();
     const content = JSON.stringify([{ text }]);
     const mentionsJson = mentions?.length ? JSON.stringify(mentions) : null;
-    const quickMentions = options?.quickMentions ?? [];
-    const quickMentionsJson = quickMentions.length
-      ? JSON.stringify(quickMentions)
-      : null;
+    const mode = options?.mode ?? "full";
 
     const message = {
       id: msgId,
@@ -81,7 +78,7 @@ export function createRoutes(
       senderId,
       content,
       mentions: mentionsJson,
-      quickMentions: quickMentionsJson,
+      mode,
       createdAt: new Date().toISOString(),
     };
 
@@ -113,16 +110,14 @@ export function createRoutes(
       senderId,
       content: [{ text }],
       mentions: mentions ?? null,
-      quickMentions: quickMentions.length ? quickMentions : null,
+      mode,
       createdAt: message.createdAt,
     };
 
     broadcast(roomId, { type: "message", roomId, message: parsed });
 
     if (mentions?.length) {
-      const quickSet = new Set(quickMentions);
       for (const mentionedId of mentions) {
-        const mode: "full" | "quick" = quickSet.has(mentionedId) ? "quick" : "full";
         broadcast(roomId, {
           type: "mention",
           roomId,
@@ -378,15 +373,8 @@ export function createRoutes(
       body.mentions = validMentions;
     }
 
-    // Quick mentions must be a subset of mentions
-    if (Array.isArray(body.quickMentions)) {
-      const mentionSet = new Set(body.mentions ?? []);
-      body.quickMentions = body.quickMentions.filter((id: string) =>
-        mentionSet.has(id),
-      );
-    } else {
-      body.quickMentions = [];
-    }
+    // Validate mode
+    const mode: "full" | "quick" = body.mode === "quick" ? "quick" : "full";
 
     const text =
       body.text ??
@@ -399,7 +387,7 @@ export function createRoutes(
 
     try {
       await postMessageInternal(roomId, body.senderId, text, body.mentions, {
-        quickMentions: body.quickMentions,
+        mode,
       });
     } catch (err: any) {
       if (err.message?.includes("FOREIGN KEY")) {
@@ -439,7 +427,7 @@ export function createRoutes(
         senderId: r.senderId,
         content: safeParse(r.content, []),
         mentions: r.mentions ? safeParse(r.mentions, null) : null,
-        quickMentions: r.quickMentions ? safeParse(r.quickMentions, null) : null,
+        mode: r.mode ?? "full",
         createdAt: r.createdAt,
       })),
     );

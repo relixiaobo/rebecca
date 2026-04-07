@@ -1,7 +1,7 @@
 import * as readline from "node:readline";
 import WebSocket from "ws";
 import { api, getWsUrl } from "../api.js";
-import { parseMentionsWithMode } from "../mentions.js";
+import { parseMentions, parseModePrefix } from "../mentions.js";
 
 export async function connectCommand(roomId: string) {
   const participantId = `human/${process.env.USER ?? "user"}`;
@@ -157,18 +157,18 @@ export async function connectCommand(roomId: string) {
       return;
     }
 
-    // Parse @mentions and @name? quick mentions
-    const parsed = parseMentionsWithMode(trimmed, participants, participantId);
-    const mentions = parsed.mentions.length > 0 ? parsed.mentions : undefined;
-    const quickMentions =
-      parsed.quickMentions.length > 0 ? parsed.quickMentions : undefined;
+    // Detect /btw prefix and strip it
+    const { mode, text: messageText } = parseModePrefix(trimmed);
+
+    // Parse @mentions
+    const mentions = parseMentions(messageText, participants, participantId);
 
     await api.postMessage(
       roomId,
       participantId,
-      trimmed,
+      messageText,
       mentions,
-      quickMentions,
+      mode,
     );
     rl.prompt();
   });

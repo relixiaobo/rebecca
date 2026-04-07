@@ -11,7 +11,7 @@ import {
   configExists,
   configPath,
 } from "./config.js";
-import { parseMentionsWithMode } from "./mentions.js";
+import { parseMentions, parseModePrefix } from "./mentions.js";
 
 const program = new Command();
 
@@ -460,23 +460,22 @@ program
       process.exit(1);
     }
     const sender = opts.as ?? defaultParticipant();
-    // Resolve @mentions and quick mentions (@name?) from message text
+    // Detect /btw prefix and strip it
+    const { mode, text: messageText } = parseModePrefix(message);
+
+    // Resolve @mentions
     let mentions: string[] | undefined;
-    let quickMentions: string[] | undefined;
     const pRes = await api.getParticipants(roomId);
     if (pRes.ok) {
-      const parsed = parseMentionsWithMode(message, pRes.data, sender);
-      mentions = parsed.mentions.length > 0 ? parsed.mentions : undefined;
-      quickMentions =
-        parsed.quickMentions.length > 0 ? parsed.quickMentions : undefined;
+      mentions = parseMentions(messageText, pRes.data, sender);
     }
 
     const res = await api.postMessage(
       roomId,
       sender,
-      message,
+      messageText,
       mentions,
-      quickMentions,
+      mode,
     );
     if (!res.ok) {
       console.error(`Failed: ${res.data?.error ?? res.status}`);
@@ -484,7 +483,7 @@ program
     }
     const summary: string[] = [];
     if (mentions?.length) summary.push(`mentioned ${mentions.length}`);
-    if (quickMentions?.length) summary.push(`quick ${quickMentions.length}`);
+    if (mode === "quick") summary.push("quick");
     console.log(
       `Message posted${summary.length ? ` (${summary.join(", ")})` : ""}`,
     );

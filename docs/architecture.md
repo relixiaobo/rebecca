@@ -202,18 +202,19 @@ When the agent comes back online, it receives the pending @mention.
 
 ### Invocation Modes
 
-Each agent invocation has a mode, signaled by the @mention syntax:
+Each message has a mode, controlled by a slash prefix at the start:
 
 | Syntax | Mode | Constraints |
 |---|---|---|
-| `@agent` | full | Tools allowed, multi-turn, may create tasks |
-| `@agent?` | quick | No tools, single turn, answer from context only |
+| `@agent ...` | full | Tools allowed, multi-turn, may create tasks |
+| `/btw @agent ...` | quick | No tools, single short response, answer from context |
+| `/q @agent ...` | quick | Alias for `/btw` |
 
-The mode is parsed from message text and passed to the connector. The connector is responsible for enforcing the constraints at the protocol level — not just hinting via prompt.
+The mode is parsed from the message text in the CLI: if the message starts with `/btw` or `/q`, the prefix is stripped and `mode=quick` is set on the message. All agents mentioned in a quick message dispatch in quick mode.
 
-For Claude Code, quick mode passes additional flags or restricts the tool list. For Codex, similar restrictions apply. The system prompt also reinforces the constraint.
+The mode is enforced via the agent's system prompt (no tools, no @mention chains, one short response). For agents spawned as long-lived processes (Claude Code, Codex resume) the constraint is prompt-only — the model can still ignore it. Stronger enforcement (per-call flag overrides, separate quick subprocess) is a future refinement.
 
-This pattern is inspired by Claude Code's `/btw` (by the way) feature, which spawns a constrained sub-agent for fire-and-forget side questions while the main agent continues working.
+This pattern is inspired by Claude Code's `/btw` (by the way) command for fire-and-forget side questions.
 
 ### Supported Agent Types
 

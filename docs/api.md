@@ -74,6 +74,13 @@ rebecca post "hello @reviewer"
 rebecca post my-project "hello" --as human/lixiaobo
 ```
 
+Prefix the message with `/btw` (or `/q`) to mark the whole message as a quick aside. Quick messages instruct mentioned agents to answer briefly from context only — no tools, no follow-up chains.
+
+```bash
+rebecca post "/btw @reviewer how many TS files in src/"
+rebecca post "/q @reviewer what branch are we on"
+```
+
 ### `rebecca mentions [room]`
 
 Check pending @mentions.
@@ -119,9 +126,13 @@ GET    /rooms/:id/participants         → [{id, name, kind, status, ...}]
 ### Messages
 
 ```
-POST   /rooms/:id/messages             { senderId, text, mentions? }
-GET    /rooms/:id/messages?limit=N&before=<id>
+POST   /rooms/:id/messages             { senderId, text, mentions?, mode? }
+GET    /rooms/:id/messages?limit=N&before=<isoTimestamp>
 ```
+
+`mode` is `"full"` (default) or `"quick"`. Quick messages instruct mentioned agents to answer briefly from context only. The CLI sets `mode: "quick"` automatically when the message text starts with `/btw` or `/q`.
+
+Returned messages include `mode`, `mentions`, and the parsed `content` parts.
 
 ### Tasks
 
@@ -161,13 +172,15 @@ You will then receive events for that room:
 
 ```json
 { "type": "message", "roomId": "...", "message": { ... } }
-{ "type": "mention", "roomId": "...", "messageId": "...", "senderId": "...", "mentionedId": "..." }
+{ "type": "mention", "roomId": "...", "messageId": "...", "senderId": "...", "mentionedId": "...", "mode": "full" }
 { "type": "task_created", "roomId": "...", "task": { ... } }
 { "type": "task_update", "roomId": "...", "task": { ... } }
 { "type": "status_change", "roomId": "...", "participantId": "...", "status": "..." }
 { "type": "participant_joined", "roomId": "...", "participant": { ... } }
 { "type": "participant_left", "roomId": "...", "participantId": "..." }
 ```
+
+The `mention` event includes `mode` (`"full"` or `"quick"`).
 
 The connection is heartbeated with ping/pong every 30s. Use `unsubscribe` to leave a room without disconnecting.
 

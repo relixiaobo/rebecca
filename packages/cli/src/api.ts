@@ -71,13 +71,13 @@ export const api = {
     senderId: string,
     text: string,
     mentions?: string[],
-    quickMentions?: string[],
+    mode?: "full" | "quick",
   ) =>
     request("POST", `/rooms/${enc(roomId)}/messages`, {
       senderId,
       text,
       mentions: mentions?.length ? mentions : undefined,
-      quickMentions: quickMentions?.length ? quickMentions : undefined,
+      mode,
     }),
 
   readMessages: (roomId: string, limit?: number, before?: string) => {

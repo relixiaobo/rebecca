@@ -133,12 +133,12 @@ Tells someone "this needs your attention." Same as @mention in Slack.
 - Chain ends when no one is @mentioned → conversation stops on its own
 - @mention an offline/unavailable agent → message is saved, agent sees it when back
 
-#### Quick questions: `@agent?`
+#### Quick questions: `/btw`
 
-Sometimes you want a fast answer, not a long task. Use `@agent?` for a quick query:
+Sometimes you want a fast answer, not a long task. Prefix the message with `/btw` ("by the way") and any agents mentioned in it will respond in quick mode — no tools, no tasks, no follow-up chains. Just an answer from context.
 
 ```
-you: @reviewer? how many files in src/
+you: /btw @reviewer how many files in src/
 [reviewer]: 7
 
 you: @reviewer please refactor the auth module
@@ -146,12 +146,12 @@ you: @reviewer please refactor the auth module
 ... (long-running work) ...
 ```
 
-The `?` tells the agent: answer from context only. Don't use tools. Don't do additional work. Just respond. This is useful for clarifications, quick lookups, and "by the way" questions.
+`/q` is a shorter alias for `/btw`. Both work the same.
 
 | Form | Behavior |
 |---|---|
-| `@agent` | Full invocation. Agent can use tools, do work, take time. |
-| `@agent?` | Quick query. No tools. Single turn. Fast. |
+| `@agent ...` | Full invocation. Agent can use tools, do work, take time. |
+| `/btw @agent ...` | Quick query. No tools. Single short response. |
 
 ### Task
 
