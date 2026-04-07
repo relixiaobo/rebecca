@@ -1,0 +1,15 @@
+{
+  "name": "rebecca",
+  "version": "0.2.0",
+  "description": "Communication infrastructure for agents and humans.",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev": "npm run dev --workspace=packages/server"
+  },
+  "license": "MIT"
+}

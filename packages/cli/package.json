@@ -1,0 +1,23 @@
+{
+  "name": "@rebecca/cli",
+  "version": "0.2.0",
+  "description": "Rebecca CLI — human and agent interface.",
+  "type": "module",
+  "bin": {
+    "rebecca": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "ws": "^8.18.2",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.2"
+  }
+}

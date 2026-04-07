@@ -1,0 +1,26 @@
+{
+  "name": "@rebecca/server",
+  "version": "0.2.0",
+  "description": "Rebecca server — Room persistence, API, agent management.",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.9.1",
+    "drizzle-orm": "^0.44.2",
+    "hono": "^4.7.10",
+    "@hono/node-server": "^1.14.1",
+    "ws": "^8.18.2",
+    "dotenv": "^17.4.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/ws": "^8.18.1",
+    "drizzle-kit": "^0.31.1",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.2"
+  }
+}
