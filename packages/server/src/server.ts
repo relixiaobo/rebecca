@@ -4,8 +4,17 @@ import { serve } from "@hono/node-server";
 import { createDb } from "./db/index.js";
 import { createRoutes } from "./api/routes.js";
 import { setupWebSocket } from "./api/ws.js";
+import { loadOrCreateToken, tokenPath } from "./api/auth.js";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import {
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  mkdirSync,
+} from "node:fs";
+
+const PID_PATH = join(homedir(), ".rebecca", "server.pid");
 
 const DEFAULT_PORT = 4135;
 const DEFAULT_HOST = "127.0.0.1";
@@ -18,6 +27,15 @@ async function main() {
 
   console.log(`[rebecca-server] Database: ${dbPath}`);
 
+  const token = loadOrCreateToken();
+  console.log(`[rebecca-server] Token: ${tokenPath()}`);
+
+  // Write PID file for clean shutdown by CLI
+  if (!existsSync(dirname(PID_PATH))) {
+    mkdirSync(dirname(PID_PATH), { recursive: true });
+  }
+  writeFileSync(PID_PATH, String(process.pid));
+
   const { db, sqlite } = createDb(dbPath);
 
   let broadcastFn: (roomId: string, event: Record<string, unknown>) => void =
@@ -29,6 +47,7 @@ async function main() {
     sqlite,
     (roomId, event) => broadcastFn(roomId, event),
     serverUrl,
+    token,
   );
 
   const server = serve(
@@ -41,7 +60,7 @@ async function main() {
   );
 
   const httpServer = server as unknown as ReturnType<typeof createServer>;
-  const { wss, broadcast } = setupWebSocket(httpServer);
+  const { wss, broadcast } = setupWebSocket(httpServer, token);
   broadcastFn = broadcast;
 
   console.log(`[rebecca-server] WebSocket ready on ws://${host}:${port}/ws`);
@@ -60,6 +79,9 @@ async function main() {
     wss.close();
     httpServer.close();
     sqlite.close();
+    try {
+      unlinkSync(PID_PATH);
+    } catch {}
     process.exit(0);
   };
 

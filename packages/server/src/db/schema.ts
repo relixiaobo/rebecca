@@ -78,6 +78,28 @@ export const agentConfigs = sqliteTable(
   (table) => [index("idx_agent_configs_room").on(table.roomId)],
 );
 
+export const pendingMentions = sqliteTable(
+  "pending_mentions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    participantId: text("participant_id").notNull(),
+    roomId: text("room_id")
+      .notNull()
+      .references(() => rooms.id),
+    messageId: text("message_id").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    deliveredAt: text("delivered_at"),
+  },
+  (table) => [
+    index("idx_pending_mentions_participant").on(
+      table.participantId,
+      table.deliveredAt,
+    ),
+  ],
+);
+
 export const tasks = sqliteTable(
   "tasks",
   {

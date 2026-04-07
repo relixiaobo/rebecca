@@ -56,11 +56,18 @@ export async function connectCommand(roomId: string) {
   console.log("---");
 
   // Connect WebSocket for real-time updates
-  const ws = new WebSocket(`${getWsUrl()}?participant=${participantId}`);
+  const wsUrl = getWsUrl();
+  const sep = wsUrl.includes("?") ? "&" : "?";
+  const ws = new WebSocket(
+    `${wsUrl}${sep}participant=${encodeURIComponent(participantId)}`,
+  );
 
   ws.on("open", () => {
     ws.send(JSON.stringify({ type: "subscribe", roomId }));
   });
+
+  // Live participant list — kept in sync via WebSocket events
+  let participants: any[] = room.participants ?? [];
 
   ws.on("message", (data) => {
     try {
@@ -86,6 +93,23 @@ export async function connectCommand(roomId: string) {
         console.log(
           `\x1b[33m[status]\x1b[0m ${event.participantId}: ${event.status}`,
         );
+        rl.prompt();
+      }
+
+      if (event.type === "participant_joined") {
+        const p = event.participant;
+        if (p && !participants.find((x) => x.id === p.id)) {
+          participants.push(p);
+          process.stdout.write(`\r\x1b[K`);
+          console.log(`\x1b[33m[joined]\x1b[0m ${p.name} (${p.kind})`);
+          rl.prompt();
+        }
+      }
+
+      if (event.type === "participant_left") {
+        participants = participants.filter((x) => x.id !== event.participantId);
+        process.stdout.write(`\r\x1b[K`);
+        console.log(`\x1b[33m[left]\x1b[0m ${event.participantId}`);
         rl.prompt();
       }
     } catch {
@@ -118,8 +142,8 @@ export async function connectCommand(roomId: string) {
       return;
     }
 
-    // Parse @mentions
-    const mentions = parseMentions(trimmed, room.participants ?? [], participantId);
+    // Parse @mentions against the live participant list
+    const mentions = parseMentions(trimmed, participants, participantId);
 
     await api.postMessage(roomId, participantId, trimmed, mentions);
     rl.prompt();

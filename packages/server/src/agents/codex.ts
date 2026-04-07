@@ -91,7 +91,7 @@ export class CodexRunner implements AgentRunner {
       const proc = spawn(this.config.command, args, {
         cwd: this.config.cwd ?? process.cwd(),
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, ...this.config.env },
+        env: this.config.env ?? { ...process.env },
       });
 
       this.currentProcess = proc;

@@ -72,14 +72,33 @@ server
   .command("stop")
   .description("Stop the Rebecca server")
   .action(async () => {
+    const { existsSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { homedir } = await import("node:os");
+    const pidPath = join(homedir(), ".rebecca", "server.pid");
+
+    if (!existsSync(pidPath)) {
+      console.log("Server is not running (no PID file).");
+      return;
+    }
+
+    const pidStr = readFileSync(pidPath, "utf-8").trim();
+    const pid = parseInt(pidStr, 10);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      console.error(`Invalid PID file: ${pidStr}`);
+      process.exit(1);
+    }
+
     try {
-      // Send a request to trigger shutdown — in future, add a shutdown endpoint
-      console.log("Stopping server...");
-      // For now, find and kill the process
-      const res = spawn("pkill", ["-f", "rebecca.*server"]);
-      res.on("close", () => console.log("Server stopped."));
-    } catch {
-      console.error("Failed to stop server.");
+      process.kill(pid, "SIGTERM");
+      console.log(`Stopping server (pid: ${pid})...`);
+    } catch (err: any) {
+      if (err.code === "ESRCH") {
+        console.log("Server is not running (stale PID file).");
+        return;
+      }
+      console.error(`Failed to stop server: ${err.message}`);
+      process.exit(1);
     }
   });
 
@@ -384,7 +403,10 @@ program
   .command("read [room]")
   .description("Read recent messages (defaults to $REBECCA_ROOM)")
   .option("--last <n>", "Number of messages", "20")
-  .option("--before <id>", "Read messages before this ID")
+  .option(
+    "--before <isoTimestamp>",
+    "Read messages with createdAt before this ISO timestamp",
+  )
   .option("--json", "Output as JSON (one object per line)")
   .action(
     async (
@@ -588,9 +610,10 @@ async function waitForMention(
   forId: string,
 ): Promise<{ messageId: string; senderId: string } | null> {
   const { default: WS } = await import("ws");
-  const wsUrl =
-    (process.env.REBECCA_URL ?? "http://127.0.0.1:4135").replace("http", "ws") +
-    `/ws?participant=${forId}`;
+  const { getWsUrl } = await import("./api.js");
+  const baseWs = getWsUrl();
+  const sep = baseWs.includes("?") ? "&" : "?";
+  const wsUrl = `${baseWs}${sep}participant=${encodeURIComponent(forId)}`;
 
   return new Promise((resolve) => {
     const ws = new WS(wsUrl);

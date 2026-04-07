@@ -5,6 +5,7 @@ import { schema } from "../db/index.js";
 import type { WebSocketBroadcaster } from "./ws.js";
 import Database from "better-sqlite3";
 import { AgentManager } from "../agents/manager.js";
+import { createAuthMiddleware } from "./auth.js";
 
 type SqliteInstance = InstanceType<typeof Database>;
 
@@ -13,6 +14,7 @@ export function createRoutes(
   sqlite: SqliteInstance,
   broadcast: WebSocketBroadcaster,
   serverUrl: string,
+  token: string,
 ) {
   // ─── Agent Manager ──────────────────────────────────────
 
@@ -106,9 +108,13 @@ export function createRoutes(
     setStatus,
     broadcast,
     serverUrl,
+    token,
   );
 
   const app = new Hono();
+
+  // All routes require auth (override with REBECCA_AUTH=off)
+  app.use("*", createAuthMiddleware(token));
 
   // ─── Helpers ────────────────────────────────────────────
 
@@ -282,6 +288,53 @@ export function createRoutes(
     }
     if (!body.text && !body.content) {
       return c.json({ error: "Missing required field: text or content" }, 400);
+    }
+
+    // Verify room exists
+    const room = db
+      .select()
+      .from(schema.rooms)
+      .where(eq(schema.rooms.id, roomId))
+      .get();
+    if (!room) return c.json({ error: "Room not found" }, 404);
+
+    // Verify sender is a member of the room (system messages exempt)
+    if (body.senderId !== "system") {
+      const member = db
+        .select()
+        .from(schema.roomMembers)
+        .where(
+          and(
+            eq(schema.roomMembers.roomId, roomId),
+            eq(schema.roomMembers.participantId, body.senderId),
+          ),
+        )
+        .get();
+      if (!member) {
+        return c.json(
+          { error: `Sender ${body.senderId} is not a member of room ${roomId}` },
+          403,
+        );
+      }
+    }
+
+    // Verify mentions are room members
+    if (Array.isArray(body.mentions) && body.mentions.length > 0) {
+      const validMentions: string[] = [];
+      for (const mid of body.mentions) {
+        const mm = db
+          .select()
+          .from(schema.roomMembers)
+          .where(
+            and(
+              eq(schema.roomMembers.roomId, roomId),
+              eq(schema.roomMembers.participantId, mid),
+            ),
+          )
+          .get();
+        if (mm) validMentions.push(mid);
+      }
+      body.mentions = validMentions;
     }
 
     const text =
@@ -483,7 +536,26 @@ export function createRoutes(
   app.delete("/rooms/:id/agents/:name", async (c) => {
     const roomId = c.req.param("id");
     const name = c.req.param("name");
-    const participantId = `agent/${name}`;
+
+    // Look up by display name within this room. Fall back to "agent/<name>"
+    // for compatibility with the default naming.
+    const matchByName = db
+      .select()
+      .from(schema.agentConfigs)
+      .innerJoin(
+        schema.participants,
+        eq(schema.agentConfigs.participantId, schema.participants.id),
+      )
+      .where(
+        and(
+          eq(schema.agentConfigs.roomId, roomId),
+          eq(schema.participants.name, name),
+        ),
+      )
+      .get();
+
+    const participantId = matchByName?.agent_configs.participantId
+      ?? `agent/${name}`;
 
     await agentManager.stopAgent(participantId).catch(() => {});
 

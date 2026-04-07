@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server } from "node:http";
+import { validateWsToken } from "./auth.js";
 
 interface WsClient {
   ws: WebSocket;
@@ -15,7 +16,7 @@ export type WebSocketBroadcaster = (
 
 const MAX_SUBSCRIPTIONS = 50;
 
-export function setupWebSocket(server: Server) {
+export function setupWebSocket(server: Server, token: string) {
   const wss = new WebSocketServer({ server, path: "/ws" });
   const clients = new Set<WsClient>();
 
@@ -36,6 +37,13 @@ export function setupWebSocket(server: Server) {
 
   wss.on("connection", (ws, req) => {
     const url = new URL(req.url ?? "/", "http://localhost");
+
+    // Validate auth token
+    if (!validateWsToken(url.searchParams, token)) {
+      ws.close(1008, "Unauthorized");
+      return;
+    }
+
     const participantId = url.searchParams.get("participant");
 
     const client: WsClient = {

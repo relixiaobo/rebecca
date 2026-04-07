@@ -39,7 +39,21 @@ export class ClaudeCodeRunner implements AgentRunner {
     this.process = spawn(this.config.command, args, {
       cwd: this.config.cwd ?? process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, ...this.config.env },
+      env: this.config.env ?? { ...process.env },
+    });
+
+    this.process.on("error", (err) => {
+      console.error(`[claude-code] spawn error: ${err.message}`);
+      this.process = null;
+      if (this.pendingReject) {
+        const reject = this.pendingReject;
+        this.pendingReject = null;
+        this.pendingResolve = null;
+        reject(err);
+      }
+      if (!this.stopRequested) {
+        for (const cb of this.exitCallbacks) cb(null);
+      }
     });
 
     this.process.stdout?.on("data", (chunk: Buffer) => {
@@ -123,11 +137,19 @@ export class ClaudeCodeRunner implements AgentRunner {
     }
   }
 
+  private pendingTimeout: NodeJS.Timeout | null = null;
+
   private handleEvent(event: Record<string, unknown>) {
     if (event.type === "result" && this.pendingResolve) {
       const text = (event.result as string) ?? "";
-      this.pendingResolve(text);
+      const resolve = this.pendingResolve;
       this.pendingResolve = null;
+      this.pendingReject = null;
+      if (this.pendingTimeout) {
+        clearTimeout(this.pendingTimeout);
+        this.pendingTimeout = null;
+      }
+      resolve(text);
     }
   }
 
@@ -135,10 +157,11 @@ export class ClaudeCodeRunner implements AgentRunner {
     return new Promise((resolve, reject) => {
       this.pendingResolve = resolve;
       this.pendingReject = reject;
-      setTimeout(() => {
+      this.pendingTimeout = setTimeout(() => {
         if (this.pendingResolve === resolve) {
           this.pendingResolve = null;
           this.pendingReject = null;
+          this.pendingTimeout = null;
           resolve("");
         }
       }, 300_000);

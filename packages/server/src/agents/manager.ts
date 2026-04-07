@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, asc, and } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { schema } from "../db/index.js";
 import { ClaudeCodeRunner } from "./claude-code.js";
@@ -38,8 +38,8 @@ interface RunningAgent {
   type: string;
   runner: AgentRunner;
   busy: boolean;
+  draining: boolean;
   queue: PendingMention[];
-  restartAttempts: number;
   restartTimer: NodeJS.Timeout | null;
 }
 
@@ -47,15 +47,37 @@ const RECENT_CONTEXT_SIZE = 20;
 const MAX_QUEUE_SIZE = 100;
 const RESTART_BACKOFF = [1000, 2000, 4000, 8000, 15000, 30000];
 
+// Whitelist of host env vars to inherit. Anything not in this list is dropped
+// to prevent server-side secrets (.env API keys, etc.) from leaking into agents.
+const ENV_INHERIT_KEYS = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TERM",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TMPDIR",
+  "TZ",
+  "SSH_AUTH_SOCK",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+]);
+
 export class AgentManager {
   private db: Db;
   private postMessage: PostMessageFn;
   private setStatus: SetStatusFn;
   private broadcast: BroadcastFn;
   private agents = new Map<string, RunningAgent>();
+  private restartAttempts = new Map<string, number>();
   private shuttingDown = false;
   private cliBinDir: string;
   private serverUrl: string;
+  private token: string;
 
   constructor(
     db: Db,
@@ -63,24 +85,34 @@ export class AgentManager {
     setStatus: SetStatusFn,
     broadcast: BroadcastFn,
     serverUrl: string,
+    token: string,
   ) {
     this.db = db;
     this.postMessage = postMessage;
     this.setStatus = setStatus;
     this.broadcast = broadcast;
     this.serverUrl = serverUrl;
+    this.token = token;
     this.cliBinDir = ensureRebeccaCliAvailable();
   }
 
-  /** Build the env block passed to spawned agent processes */
-  private buildAgentEnv(roomId: string, participantId: string): Record<string, string> {
-    const path = `${this.cliBinDir}:${process.env.PATH ?? ""}`;
-    return {
-      REBECCA_URL: this.serverUrl,
-      REBECCA_ROOM: roomId,
-      REBECCA_PARTICIPANT: participantId,
-      PATH: path,
-    };
+  /** Build a minimal env for spawned agents (whitelist + REBECCA_*). */
+  private buildAgentEnv(
+    roomId: string,
+    participantId: string,
+  ): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const key of ENV_INHERIT_KEYS) {
+      const v = process.env[key];
+      if (v !== undefined) env[key] = v;
+    }
+    // Prepend cli bin to PATH
+    env.PATH = `${this.cliBinDir}:${env.PATH ?? ""}`;
+    env.REBECCA_URL = this.serverUrl;
+    env.REBECCA_ROOM = roomId;
+    env.REBECCA_PARTICIPANT = participantId;
+    env.REBECCA_TOKEN = this.token;
+    return env;
   }
 
   async startAll() {
@@ -164,8 +196,8 @@ export class AgentManager {
       type: config.type,
       runner,
       busy: false,
+      draining: false,
       queue: [],
-      restartAttempts: 0,
       restartTimer: null,
     };
 
@@ -183,10 +215,10 @@ export class AgentManager {
       this.setStatus(participantId, "online");
       console.log(`[agent-manager] Started ${participantId}`);
 
-      // Deliver any pending mentions from before this agent was online
-      this.deliverPendingMentions(agent).catch((err) => {
+      // Replay any undelivered pending mentions for this agent
+      this.replayPendingMentions(agent).catch((err) => {
         console.error(
-          `[agent-manager] Failed to deliver pending mentions for ${participantId}:`,
+          `[agent-manager] Failed to replay pending mentions for ${participantId}:`,
           err,
         );
       });
@@ -221,6 +253,25 @@ export class AgentManager {
     mentionedId: string,
     messageId: string,
   ) {
+    // Record this mention as pending. We'll mark it delivered after a
+    // successful invocation. Only record for known agents.
+    const config = this.db
+      .select()
+      .from(schema.agentConfigs)
+      .where(eq(schema.agentConfigs.participantId, mentionedId))
+      .get();
+
+    if (config && config.roomId === roomId) {
+      this.db
+        .insert(schema.pendingMentions)
+        .values({
+          participantId: mentionedId,
+          roomId,
+          messageId,
+        })
+        .run();
+    }
+
     const agent = this.agents.get(mentionedId);
 
     if (!agent) {
@@ -231,8 +282,8 @@ export class AgentManager {
         .where(eq(schema.agentConfigs.participantId, mentionedId))
         .get();
 
-      if (config) {
-        // Known agent but not running — post system notice
+      if (config && config.roomId === roomId) {
+        // Known agent in this room but not running — post system notice
         const participant = this.db
           .select()
           .from(schema.participants)
@@ -249,23 +300,62 @@ export class AgentManager {
       return;
     }
 
-    if (agent.busy) {
-      if (agent.queue.length < MAX_QUEUE_SIZE) {
-        agent.queue.push({ roomId, messageId });
-        console.log(
-          `[agent-manager] ${mentionedId} busy, queued (depth: ${agent.queue.length})`,
-        );
-      } else {
-        console.error(
-          `[agent-manager] ${mentionedId} queue full, dropping mention`,
-        );
-      }
+    // Cross-room safety: verify the agent belongs to this room
+    if (agent.roomId !== roomId) {
+      console.warn(
+        `[agent-manager] Refusing cross-room mention: ${mentionedId} is in ${agent.roomId}, mention came from ${roomId}`,
+      );
       return;
     }
 
-    await this.invokeAgent(agent, roomId, messageId);
+    // Always enqueue. The drain loop guarantees serial processing.
+    if (agent.queue.length >= MAX_QUEUE_SIZE) {
+      console.error(
+        `[agent-manager] ${mentionedId} queue full, dropping mention`,
+      );
+      return;
+    }
+    agent.queue.push({ roomId, messageId });
+
+    if (!agent.draining) {
+      this.drainQueue(agent).catch((err) =>
+        console.error(`[agent-manager] drain error for ${mentionedId}:`, err),
+      );
+    } else {
+      console.log(
+        `[agent-manager] ${mentionedId} busy, queued (depth: ${agent.queue.length})`,
+      );
+    }
   }
 
+  /** Drain the agent's mention queue serially. Only one drain runs at a time. */
+  private async drainQueue(agent: RunningAgent) {
+    if (agent.draining) return;
+    agent.draining = true;
+
+    try {
+      while (agent.queue.length > 0) {
+        const next = agent.queue.shift()!;
+        await this.invokeAgent(agent, next.roomId, next.messageId);
+
+        // If runner died during invocation, stop draining
+        if (!agent.runner.isReady() || !this.agents.has(agent.participantId)) {
+          break;
+        }
+      }
+    } finally {
+      agent.draining = false;
+      agent.busy = false;
+      if (
+        this.agents.has(agent.participantId) &&
+        agent.runner.isReady()
+      ) {
+        this.setStatus(agent.participantId, "online");
+      }
+    }
+  }
+
+  /** Invoke the agent for one message. Caller manages queue/drain state. */
   private async invokeAgent(
     agent: RunningAgent,
     roomId: string,
@@ -276,10 +366,7 @@ export class AgentManager {
 
     try {
       const context = this.buildContext(roomId, agent.participantId, messageId);
-      if (!context) {
-        agent.busy = false;
-        return;
-      }
+      if (!context) return;
 
       const response = await agent.runner.invoke(context);
       if (response.text && response.text.trim()) {
@@ -290,30 +377,31 @@ export class AgentManager {
           response.mentions,
         );
       }
-      agent.restartAttempts = 0;
+      // Mark the pending mention(s) for this message as delivered
+      this.markPendingDelivered(agent.participantId, messageId);
+      // Reset persistent restart attempts on a successful invocation
+      this.restartAttempts.delete(agent.participantId);
     } catch (err) {
       console.error(
         `[agent-manager] Invoke error for ${agent.participantId}:`,
         err,
       );
       this.setStatus(agent.participantId, "error", String(err));
-    } finally {
-      agent.busy = false;
-      const a = this.agents.get(agent.participantId);
-      if (a && a.runner.isReady()) {
-        this.setStatus(agent.participantId, "online");
-        // Drain queue
-        if (a.queue.length > 0) {
-          const next = a.queue.shift()!;
-          // Schedule rather than recurse
-          setImmediate(() => {
-            this.invokeAgent(a, next.roomId, next.messageId).catch((e) =>
-              console.error("[agent-manager] Drain error:", e),
-            );
-          });
-        }
-      }
     }
+  }
+
+  private markPendingDelivered(participantId: string, messageId: string) {
+    const now = new Date().toISOString();
+    this.db
+      .update(schema.pendingMentions)
+      .set({ deliveredAt: now })
+      .where(
+        and(
+          eq(schema.pendingMentions.participantId, participantId),
+          eq(schema.pendingMentions.messageId, messageId),
+        ),
+      )
+      .run();
   }
 
   private handleUnexpectedExit(agent: RunningAgent) {
@@ -326,68 +414,62 @@ export class AgentManager {
       `Process exited unexpectedly`,
     );
 
-    const delay =
-      RESTART_BACKOFF[
-        Math.min(agent.restartAttempts, RESTART_BACKOFF.length - 1)
-      ];
-    agent.restartAttempts += 1;
+    // Persistent attempt counter — survives across RunningAgent recreations
+    const prev = this.restartAttempts.get(agent.participantId) ?? 0;
+    const delay = RESTART_BACKOFF[Math.min(prev, RESTART_BACKOFF.length - 1)];
+    this.restartAttempts.set(agent.participantId, prev + 1);
 
     console.log(
-      `[agent-manager] Restarting ${agent.participantId} in ${delay}ms (attempt ${agent.restartAttempts})`,
+      `[agent-manager] Restarting ${agent.participantId} in ${delay}ms (attempt ${prev + 1})`,
     );
 
-    agent.restartTimer = setTimeout(() => {
+    setTimeout(() => {
+      if (this.shuttingDown) return;
       this.startAgent(agent.participantId).catch((err) => {
         console.error(
           `[agent-manager] Restart failed for ${agent.participantId}:`,
           err,
         );
-        // Schedule another attempt
+        // Treat the failed restart as another unexpected exit so backoff escalates
         this.handleUnexpectedExit(agent);
       });
     }, delay);
   }
 
-  /** When agent comes online, find any unhandled @mentions and process them */
-  private async deliverPendingMentions(agent: RunningAgent) {
-    // Find messages mentioning this agent that don't have a later response from it
-    const allMessages = this.db
+  /** When agent comes online, replay any undelivered pending mentions */
+  private async replayPendingMentions(agent: RunningAgent) {
+    const pending = this.db
       .select()
-      .from(schema.messages)
-      .where(eq(schema.messages.roomId, agent.roomId))
-      .all();
-
-    // Find the timestamp of this agent's most recent message
-    const lastResponse = allMessages
-      .filter((m) => m.senderId === agent.participantId)
-      .sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1))[0];
-
-    const cutoff = lastResponse?.createdAt ?? "";
-
-    const pending = allMessages.filter((m) => {
-      if (m.createdAt <= cutoff) return false;
-      if (!m.mentions) return false;
-      try {
-        const mentions = JSON.parse(m.mentions);
-        return Array.isArray(mentions) && mentions.includes(agent.participantId);
-      } catch {
-        return false;
-      }
-    });
+      .from(schema.pendingMentions)
+      .where(
+        and(
+          eq(schema.pendingMentions.participantId, agent.participantId),
+        ),
+      )
+      .orderBy(asc(schema.pendingMentions.createdAt))
+      .all()
+      .filter((r) => r.deliveredAt === null);
 
     if (pending.length === 0) return;
 
     console.log(
-      `[agent-manager] Delivering ${pending.length} pending mention(s) to ${agent.participantId}`,
+      `[agent-manager] Replaying ${pending.length} pending mention(s) for ${agent.participantId}`,
     );
 
-    for (const msg of pending) {
-      // Process sequentially to respect the queue
-      if (agent.busy) {
-        agent.queue.push({ roomId: agent.roomId, messageId: msg.id });
-      } else {
-        await this.invokeAgent(agent, agent.roomId, msg.id);
-      }
+    for (const row of pending) {
+      // Only enqueue if it's for this agent's room
+      if (row.roomId !== agent.roomId) continue;
+      if (agent.queue.length >= MAX_QUEUE_SIZE) break;
+      agent.queue.push({ roomId: row.roomId, messageId: row.messageId });
+    }
+
+    if (!agent.draining && agent.queue.length > 0) {
+      this.drainQueue(agent).catch((err) =>
+        console.error(
+          `[agent-manager] replay drain error for ${agent.participantId}:`,
+          err,
+        ),
+      );
     }
   }
 
@@ -429,6 +511,7 @@ export class AgentManager {
       .select()
       .from(schema.messages)
       .where(eq(schema.messages.roomId, roomId))
+      .orderBy(asc(schema.messages.createdAt))
       .all()
       .slice(-RECENT_CONTEXT_SIZE);
 

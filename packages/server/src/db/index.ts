@@ -87,6 +87,18 @@ export function createDb(dbPath: string) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_agent_configs_room ON agent_configs(room_id);
+
+    CREATE TABLE IF NOT EXISTS pending_mentions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      participant_id TEXT NOT NULL,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      message_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      delivered_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pending_mentions_participant
+      ON pending_mentions(participant_id, delivered_at);
   `);
 
   return { db, sqlite };

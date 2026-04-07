@@ -1,7 +1,20 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+
 const DEFAULT_BASE = "http://127.0.0.1:4135";
+const TOKEN_PATH = join(homedir(), ".rebecca", "auth.token");
 
 function getBase(): string {
   return process.env.REBECCA_URL ?? DEFAULT_BASE;
+}
+
+function getToken(): string | null {
+  if (process.env.REBECCA_TOKEN) return process.env.REBECCA_TOKEN;
+  if (existsSync(TOKEN_PATH)) {
+    return readFileSync(TOKEN_PATH, "utf-8").trim();
+  }
+  return null;
 }
 
 async function request(
@@ -10,13 +23,27 @@ async function request(
   body?: unknown,
 ): Promise<{ ok: boolean; status: number; data: any }> {
   const url = `${getBase()}${path}`;
+  const headers: Record<string, string> = {};
+  if (body) headers["Content-Type"] = "application/json";
+
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
   const res = await fetch(url, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => null);
   return { ok: res.ok, status: res.status, data };
+}
+
+export function getAuthToken(): string | null {
+  return getToken();
+}
+
+function enc(s: string): string {
+  return encodeURIComponent(s);
 }
 
 export const api = {
@@ -26,17 +53,17 @@ export const api = {
 
   listRooms: () => request("GET", "/rooms"),
 
-  getRoom: (id: string) => request("GET", `/rooms/${id}`),
+  getRoom: (id: string) => request("GET", `/rooms/${enc(id)}`),
 
   // Participants
   join: (roomId: string, id: string, name: string, kind: string) =>
-    request("POST", `/rooms/${roomId}/join`, { id, name, kind }),
+    request("POST", `/rooms/${enc(roomId)}/join`, { id, name, kind }),
 
   leave: (roomId: string, id: string) =>
-    request("POST", `/rooms/${roomId}/leave`, { id }),
+    request("POST", `/rooms/${enc(roomId)}/leave`, { id }),
 
   getParticipants: (roomId: string) =>
-    request("GET", `/rooms/${roomId}/participants`),
+    request("GET", `/rooms/${enc(roomId)}/participants`),
 
   // Messages
   postMessage: (
@@ -45,7 +72,7 @@ export const api = {
     text: string,
     mentions?: string[],
   ) =>
-    request("POST", `/rooms/${roomId}/messages`, {
+    request("POST", `/rooms/${enc(roomId)}/messages`, {
       senderId,
       text,
       mentions: mentions?.length ? mentions : undefined,
@@ -56,7 +83,10 @@ export const api = {
     if (limit) params.set("limit", String(limit));
     if (before) params.set("before", before);
     const qs = params.toString();
-    return request("GET", `/rooms/${roomId}/messages${qs ? `?${qs}` : ""}`);
+    return request(
+      "GET",
+      `/rooms/${enc(roomId)}/messages${qs ? `?${qs}` : ""}`,
+    );
   },
 
   // Agents
@@ -67,7 +97,7 @@ export const api = {
     runCommand: string,
     cwd?: string,
   ) =>
-    request("POST", `/rooms/${roomId}/agents`, {
+    request("POST", `/rooms/${enc(roomId)}/agents`, {
       name,
       type,
       runCommand,
@@ -75,22 +105,22 @@ export const api = {
     }),
 
   removeAgent: (roomId: string, name: string) =>
-    request("DELETE", `/rooms/${roomId}/agents/${name}`),
+    request("DELETE", `/rooms/${enc(roomId)}/agents/${enc(name)}`),
 
-  listAgents: (roomId: string) => request("GET", `/rooms/${roomId}/agents`),
+  listAgents: (roomId: string) => request("GET", `/rooms/${enc(roomId)}/agents`),
 
-  startRoom: (roomId: string) => request("POST", `/rooms/${roomId}/start`),
+  startRoom: (roomId: string) => request("POST", `/rooms/${enc(roomId)}/start`),
 
-  stopRoom: (roomId: string) => request("POST", `/rooms/${roomId}/stop`),
+  stopRoom: (roomId: string) => request("POST", `/rooms/${enc(roomId)}/stop`),
 
   // Tasks
   createTask: (roomId: string, description: string, assigneeId?: string) =>
-    request("POST", `/rooms/${roomId}/tasks`, { description, assigneeId }),
+    request("POST", `/rooms/${enc(roomId)}/tasks`, { description, assigneeId }),
 
   updateTask: (taskId: string, state: string) =>
-    request("PATCH", `/tasks/${taskId}`, { state }),
+    request("PATCH", `/tasks/${enc(taskId)}`, { state }),
 
-  getTasks: (roomId: string) => request("GET", `/rooms/${roomId}/tasks`),
+  getTasks: (roomId: string) => request("GET", `/rooms/${enc(roomId)}/tasks`),
 
   // Status
   status: () => request("GET", "/status"),
@@ -98,5 +128,6 @@ export const api = {
 
 export function getWsUrl(): string {
   const base = getBase().replace("http", "ws");
-  return `${base}/ws`;
+  const token = getToken();
+  return token ? `${base}/ws?token=${encodeURIComponent(token)}` : `${base}/ws`;
 }
