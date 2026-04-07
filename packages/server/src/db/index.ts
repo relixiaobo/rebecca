@@ -55,8 +55,25 @@ export function createDb(dbPath: string) {
       sender_id TEXT NOT NULL,
       content TEXT NOT NULL CHECK (json_valid(content)),
       mentions TEXT CHECK (mentions IS NULL OR json_valid(mentions)),
+      quick_mentions TEXT CHECK (quick_mentions IS NULL OR json_valid(quick_mentions)),
       created_at TEXT NOT NULL
     );
+
+    -- Migration: add quick_mentions to existing tables (no-op if already present)
+    -- SQLite ALTER TABLE ADD COLUMN is idempotent only via PRAGMA check
+    CREATE TABLE IF NOT EXISTS _migrations (id TEXT PRIMARY KEY);
+  `);
+
+  const hasQuickMentions = sqlite
+    .prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'quick_mentions'")
+    .get();
+  if (!hasQuickMentions) {
+    sqlite.exec(
+      "ALTER TABLE messages ADD COLUMN quick_mentions TEXT CHECK (quick_mentions IS NULL OR json_valid(quick_mentions))",
+    );
+  }
+
+  sqlite.exec(`
 
     CREATE INDEX IF NOT EXISTS idx_messages_room_time
       ON messages(room_id, created_at);

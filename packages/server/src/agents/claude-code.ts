@@ -185,28 +185,41 @@ function buildPrompt(ctx: AgentContext): string {
       .join(", ");
     lines.push(`Other participants: ${others}.`);
   }
-  lines.push(
-    "You were @mentioned. Respond directly. If you need someone else's help, use @name to mention them. If you have nothing to add, just answer without mentioning anyone. Do NOT @mention to confirm or agree — only when you need them to act.",
-  );
-  lines.push("");
-  lines.push(
-    "You have a `rebecca` CLI tool available via bash. It auto-targets your current room and identity. Use it for:",
-  );
-  lines.push(
-    "  • `rebecca task create \"<description>\"` — create a task before starting non-trivial work. Returns the task ID.",
-  );
-  lines.push(
-    "  • `rebecca task update <task-id> working|completed|failed` — update a task's state.",
-  );
-  lines.push(
-    "  • `rebecca read --last <n>` — scroll back through more room history if you need more context.",
-  );
-  lines.push(
-    "  • `rebecca task list` — see what tasks are in progress.",
-  );
-  lines.push(
-    "Create a task whenever you start work that takes more than a quick lookup. Mark it completed when done. Skip task tracking for trivial questions.",
-  );
+
+  if (ctx.mode === "quick") {
+    lines.push(
+      "You were @mentioned with a QUICK question (the mention used the form '@name?').",
+    );
+    lines.push(
+      "Answer briefly from the room context only. Do NOT use any tools. Do NOT read files. Do NOT run commands. Do NOT create tasks. Do NOT @mention anyone else. One short response and stop.",
+    );
+    lines.push(
+      "If the answer is not knowable from context alone, say so in one sentence.",
+    );
+  } else {
+    lines.push(
+      "You were @mentioned. Respond directly. If you need someone else's help, use @name to mention them. If you have nothing to add, just answer without mentioning anyone. Do NOT @mention to confirm or agree — only when you need them to act.",
+    );
+    lines.push("");
+    lines.push(
+      "You have a `rebecca` CLI tool available via bash. It auto-targets your current room and identity. Use it for:",
+    );
+    lines.push(
+      "  • `rebecca task create \"<description>\"` — create a task before starting non-trivial work. Returns the task ID.",
+    );
+    lines.push(
+      "  • `rebecca task update <task-id> working|completed|failed` — update a task's state.",
+    );
+    lines.push(
+      "  • `rebecca read --last <n>` — scroll back through more room history if you need more context.",
+    );
+    lines.push(
+      "  • `rebecca task list` — see what tasks are in progress.",
+    );
+    lines.push(
+      "Create a task whenever you start work that takes more than a quick lookup. Mark it completed when done. Skip task tracking for trivial questions.",
+    );
+  }
   lines.push("");
 
   // Recent context (excluding trigger)

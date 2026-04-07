@@ -1,6 +1,7 @@
 import * as readline from "node:readline";
 import WebSocket from "ws";
 import { api, getWsUrl } from "../api.js";
+import { parseMentionsWithMode } from "../mentions.js";
 
 export async function connectCommand(roomId: string) {
   const participantId = `human/${process.env.USER ?? "user"}`;
@@ -156,10 +157,19 @@ export async function connectCommand(roomId: string) {
       return;
     }
 
-    // Parse @mentions against the live participant list
-    const mentions = parseMentions(trimmed, participants, participantId);
+    // Parse @mentions and @name? quick mentions
+    const parsed = parseMentionsWithMode(trimmed, participants, participantId);
+    const mentions = parsed.mentions.length > 0 ? parsed.mentions : undefined;
+    const quickMentions =
+      parsed.quickMentions.length > 0 ? parsed.quickMentions : undefined;
 
-    await api.postMessage(roomId, participantId, trimmed, mentions);
+    await api.postMessage(
+      roomId,
+      participantId,
+      trimmed,
+      mentions,
+      quickMentions,
+    );
     rl.prompt();
   });
 
@@ -198,24 +208,3 @@ function extractText(content: any[]): string {
     .join("\n");
 }
 
-function parseMentions(
-  text: string,
-  participants: any[],
-  selfId: string,
-): string[] | undefined {
-  const pattern = /@(\w[\w-]*)/g;
-  const mentions: string[] = [];
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text)) !== null) {
-    const name = match[1].toLowerCase();
-    for (const p of participants) {
-      if (p.id !== selfId && p.name.toLowerCase() === name) {
-        mentions.push(p.id);
-        break;
-      }
-    }
-  }
-
-  return mentions.length > 0 ? mentions : undefined;
-}

@@ -7,6 +7,8 @@ export interface AgentMessage {
   createdAt: string;
 }
 
+export type InvocationMode = "full" | "quick";
+
 export interface AgentContext {
   /** The agent's own participant ID */
   participantId: string;
@@ -21,6 +23,8 @@ export interface AgentContext {
   recentMessages: AgentMessage[];
   /** The message that triggered this invocation */
   triggerMessage: AgentMessage;
+  /** Invocation mode: full = use tools, may take time; quick = answer from context only */
+  mode: InvocationMode;
 }
 
 export interface AgentResponse {

@@ -53,10 +53,10 @@ export function createRoutes(
   };
 
   interface PostOptions {
-    /** Atomically delete this pending mention when the message is inserted.
-     *  Used so agent responses and pending-mention cleanup can't be split
-     *  by a crash in between. */
+    /** Atomically delete this pending mention when the message is inserted. */
     clearPendingMention?: { participantId: string; messageId: string };
+    /** Subset of `mentions` that should be handled in quick mode. */
+    quickMentions?: string[];
   }
 
   // Internal post: used by both HTTP route and AgentManager
@@ -70,6 +70,10 @@ export function createRoutes(
     const msgId = crypto.randomUUID();
     const content = JSON.stringify([{ text }]);
     const mentionsJson = mentions?.length ? JSON.stringify(mentions) : null;
+    const quickMentions = options?.quickMentions ?? [];
+    const quickMentionsJson = quickMentions.length
+      ? JSON.stringify(quickMentions)
+      : null;
 
     const message = {
       id: msgId,
@@ -77,6 +81,7 @@ export function createRoutes(
       senderId,
       content,
       mentions: mentionsJson,
+      quickMentions: quickMentionsJson,
       createdAt: new Date().toISOString(),
     };
 
@@ -108,22 +113,26 @@ export function createRoutes(
       senderId,
       content: [{ text }],
       mentions: mentions ?? null,
+      quickMentions: quickMentions.length ? quickMentions : null,
       createdAt: message.createdAt,
     };
 
     broadcast(roomId, { type: "message", roomId, message: parsed });
 
     if (mentions?.length) {
+      const quickSet = new Set(quickMentions);
       for (const mentionedId of mentions) {
+        const mode: "full" | "quick" = quickSet.has(mentionedId) ? "quick" : "full";
         broadcast(roomId, {
           type: "mention",
           roomId,
           messageId: msgId,
           senderId,
           mentionedId,
+          mode,
         });
         // Notify agent manager
-        agentManager.handleMention(roomId, mentionedId, msgId).catch((err) => {
+        agentManager.handleMention(roomId, mentionedId, msgId, mode).catch((err) => {
           console.error("[routes] handleMention failed:", err);
         });
       }
@@ -369,6 +378,16 @@ export function createRoutes(
       body.mentions = validMentions;
     }
 
+    // Quick mentions must be a subset of mentions
+    if (Array.isArray(body.quickMentions)) {
+      const mentionSet = new Set(body.mentions ?? []);
+      body.quickMentions = body.quickMentions.filter((id: string) =>
+        mentionSet.has(id),
+      );
+    } else {
+      body.quickMentions = [];
+    }
+
     const text =
       body.text ??
       (Array.isArray(body.content)
@@ -379,7 +398,9 @@ export function createRoutes(
         : "");
 
     try {
-      await postMessageInternal(roomId, body.senderId, text, body.mentions);
+      await postMessageInternal(roomId, body.senderId, text, body.mentions, {
+        quickMentions: body.quickMentions,
+      });
     } catch (err: any) {
       if (err.message?.includes("FOREIGN KEY")) {
         return c.json({ error: "Room or participant not found" }, 404);
@@ -418,6 +439,7 @@ export function createRoutes(
         senderId: r.senderId,
         content: safeParse(r.content, []),
         mentions: r.mentions ? safeParse(r.mentions, null) : null,
+        quickMentions: r.quickMentions ? safeParse(r.quickMentions, null) : null,
         createdAt: r.createdAt,
       })),
     );

@@ -48,6 +48,7 @@ export const messages = sqliteTable(
     senderId: text("sender_id").notNull(),
     content: text("content").notNull(), // JSON: Part[]
     mentions: text("mentions"), // JSON: string[]
+    quickMentions: text("quick_mentions"), // JSON: string[] (subset of mentions)
     createdAt: text("created_at")
       .notNull()
       .$defaultFn(() => new Date().toISOString()),

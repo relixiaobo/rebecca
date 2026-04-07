@@ -11,6 +11,7 @@ import {
   configExists,
   configPath,
 } from "./config.js";
+import { parseMentionsWithMode } from "./mentions.js";
 
 const program = new Command();
 
@@ -459,31 +460,34 @@ program
       process.exit(1);
     }
     const sender = opts.as ?? defaultParticipant();
-    // Resolve @mentions from message text
+    // Resolve @mentions and quick mentions (@name?) from message text
     let mentions: string[] | undefined;
+    let quickMentions: string[] | undefined;
     const pRes = await api.getParticipants(roomId);
     if (pRes.ok) {
-      const pattern = /@(\w[\w-]*)/g;
-      const found: string[] = [];
-      let match: RegExpExecArray | null;
-      while ((match = pattern.exec(message)) !== null) {
-        const name = match[1].toLowerCase();
-        for (const p of pRes.data) {
-          if (p.id !== sender && p.name.toLowerCase() === name) {
-            found.push(p.id);
-            break;
-          }
-        }
-      }
-      if (found.length > 0) mentions = found;
+      const parsed = parseMentionsWithMode(message, pRes.data, sender);
+      mentions = parsed.mentions.length > 0 ? parsed.mentions : undefined;
+      quickMentions =
+        parsed.quickMentions.length > 0 ? parsed.quickMentions : undefined;
     }
 
-    const res = await api.postMessage(roomId, sender, message, mentions);
+    const res = await api.postMessage(
+      roomId,
+      sender,
+      message,
+      mentions,
+      quickMentions,
+    );
     if (!res.ok) {
       console.error(`Failed: ${res.data?.error ?? res.status}`);
       process.exit(1);
     }
-    console.log(`Message posted${mentions?.length ? ` (mentioned ${mentions.length})` : ""}`);
+    const summary: string[] = [];
+    if (mentions?.length) summary.push(`mentioned ${mentions.length}`);
+    if (quickMentions?.length) summary.push(`quick ${quickMentions.length}`);
+    console.log(
+      `Message posted${summary.length ? ` (${summary.join(", ")})` : ""}`,
+    );
   });
 
 // ─── Join / Leave ───────────────────────────────────────

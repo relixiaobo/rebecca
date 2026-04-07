@@ -4,6 +4,7 @@ import { schema } from "../db/index.js";
 import { ClaudeCodeRunner } from "./claude-code.js";
 import { CodexRunner } from "./codex.js";
 import { ensureRebeccaCliAvailable } from "./cli-bin.js";
+import type { InvocationMode } from "./types.js";
 import type {
   AgentRunner,
   AgentContext,
@@ -35,6 +36,7 @@ export interface BroadcastFn {
 interface PendingMention {
   roomId: string;
   messageId: string;
+  mode: InvocationMode;
 }
 
 interface RunningAgent {
@@ -293,6 +295,7 @@ export class AgentManager {
     roomId: string,
     mentionedId: string,
     messageId: string,
+    mode: InvocationMode = "full",
   ) {
     // Record this mention as pending. We'll mark it delivered after a
     // successful invocation. Only record for known agents.
@@ -358,7 +361,7 @@ export class AgentManager {
       );
       return;
     }
-    agent.queue.push({ roomId, messageId });
+    agent.queue.push({ roomId, messageId, mode });
 
     if (!agent.draining) {
       this.drainQueue(agent).catch((err) =>
@@ -379,7 +382,7 @@ export class AgentManager {
     try {
       while (agent.queue.length > 0) {
         const next = agent.queue.shift()!;
-        await this.invokeAgent(agent, next.roomId, next.messageId);
+        await this.invokeAgent(agent, next.roomId, next.messageId, next.mode);
 
         // If runner died during invocation, stop draining
         if (!agent.runner.isReady() || !this.agents.has(agent.participantId)) {
@@ -403,12 +406,18 @@ export class AgentManager {
     agent: RunningAgent,
     roomId: string,
     messageId: string,
+    mode: InvocationMode = "full",
   ) {
     agent.busy = true;
     this.setStatus(agent.participantId, "working");
 
     try {
-      const context = this.buildContext(roomId, agent.participantId, messageId);
+      const context = this.buildContext(
+        roomId,
+        agent.participantId,
+        messageId,
+        mode,
+      );
       if (!context) return;
 
       const response = await agent.runner.invoke(context);
@@ -501,7 +510,12 @@ export class AgentManager {
       // Only enqueue if it's for this agent's room
       if (row.roomId !== agent.roomId) continue;
       if (agent.queue.length >= MAX_QUEUE_SIZE) break;
-      agent.queue.push({ roomId: row.roomId, messageId: row.messageId });
+      // Replays always use full mode — quick mode is for live-attention only
+      agent.queue.push({
+        roomId: row.roomId,
+        messageId: row.messageId,
+        mode: "full",
+      });
     }
 
     if (!agent.draining && agent.queue.length > 0) {
@@ -518,6 +532,7 @@ export class AgentManager {
     roomId: string,
     participantId: string,
     triggerMessageId: string,
+    mode: InvocationMode = "full",
   ): AgentContext | null {
     const room = this.db
       .select()
@@ -605,6 +620,7 @@ export class AgentManager {
       otherParticipants,
       recentMessages,
       triggerMessage,
+      mode,
     };
   }
 }
