@@ -45,12 +45,7 @@ export class ClaudeCodeRunner implements AgentRunner {
     this.process.on("error", (err) => {
       console.error(`[claude-code] spawn error: ${err.message}`);
       this.process = null;
-      if (this.pendingReject) {
-        const reject = this.pendingReject;
-        this.pendingReject = null;
-        this.pendingResolve = null;
-        reject(err);
-      }
+      this.clearPending(err);
       if (!this.stopRequested) {
         for (const cb of this.exitCallbacks) cb(null);
       }
@@ -70,14 +65,7 @@ export class ClaudeCodeRunner implements AgentRunner {
 
     this.process.on("exit", (code) => {
       this.process = null;
-      // Reject any pending invocation
-      if (this.pendingReject) {
-        const reject = this.pendingReject;
-        this.pendingReject = null;
-        this.pendingResolve = null;
-        reject(new Error(`Process exited with code ${code}`));
-      }
-      // Notify only on unexpected exit
+      this.clearPending(new Error(`Process exited with code ${code}`));
       if (!this.stopRequested) {
         for (const cb of this.exitCallbacks) cb(code);
       }
@@ -138,6 +126,24 @@ export class ClaudeCodeRunner implements AgentRunner {
   }
 
   private pendingTimeout: NodeJS.Timeout | null = null;
+
+  /** Clear the pending-response state. If err is provided, reject; otherwise resolve empty. */
+  private clearPending(err?: Error) {
+    if (this.pendingTimeout) {
+      clearTimeout(this.pendingTimeout);
+      this.pendingTimeout = null;
+    }
+    const reject = this.pendingReject;
+    const resolve = this.pendingResolve;
+    this.pendingReject = null;
+    this.pendingResolve = null;
+    if (err) {
+      if (reject) reject(err);
+      else if (resolve) resolve("");
+    } else if (resolve) {
+      resolve("");
+    }
+  }
 
   private handleEvent(event: Record<string, unknown>) {
     if (event.type === "result" && this.pendingResolve) {

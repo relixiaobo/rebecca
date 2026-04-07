@@ -29,10 +29,12 @@ export class CodexRunner implements AgentRunner {
   }
 
   async start() {
-    // Verify codex CLI is available
+    // Verify codex CLI is available. Use the same minimal env we use for
+    // real invocations — do not inherit full server env for the probe.
     return new Promise<void>((resolve, reject) => {
       const check = spawn(this.config.command, ["--version"], {
         stdio: ["pipe", "pipe", "pipe"],
+        env: this.config.env ?? { ...process.env },
       });
       check.on("close", (code) => {
         if (code === 0) resolve();

@@ -94,11 +94,11 @@ export function createDb(dbPath: string) {
       room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
       message_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      delivered_at TEXT
+      UNIQUE (participant_id, message_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_pending_mentions_participant
-      ON pending_mentions(participant_id, delivered_at);
+      ON pending_mentions(participant_id);
   `);
 
   return { db, sqlite };

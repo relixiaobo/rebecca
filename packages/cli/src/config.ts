@@ -7,6 +7,7 @@ export interface AgentConfig {
   type: "claude-code" | "codex" | string;
   run?: string;
   cwd?: string;
+  env?: Record<string, string>;
 }
 
 export interface RebeccaConfig {

@@ -10,12 +10,17 @@ import type {
   AgentMessage,
 } from "./types.js";
 
+export interface PostMessageOptions {
+  clearPendingMention?: { participantId: string; messageId: string };
+}
+
 export interface PostMessageFn {
   (
     roomId: string,
     senderId: string,
     text: string,
     mentions?: string[],
+    options?: PostMessageOptions,
   ): Promise<void>;
 }
 
@@ -48,8 +53,11 @@ const MAX_QUEUE_SIZE = 100;
 const RESTART_BACKOFF = [1000, 2000, 4000, 8000, 15000, 30000];
 
 // Whitelist of host env vars to inherit. Anything not in this list is dropped
-// to prevent server-side secrets (.env API keys, etc.) from leaking into agents.
+// unless the agent's own config provides it, to keep the attack surface small
+// while still letting common tooling work. API keys for LLM providers and HTTP
+// proxies are included because most agent runtimes rely on them.
 const ENV_INHERIT_KEYS = new Set([
+  // System basics
   "PATH",
   "HOME",
   "USER",
@@ -65,6 +73,30 @@ const ENV_INHERIT_KEYS = new Set([
   "XDG_CONFIG_HOME",
   "XDG_DATA_HOME",
   "XDG_CACHE_HOME",
+  // Network / proxies
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  // Common LLM provider credentials
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_OPENAI_ENDPOINT",
+  "MISTRAL_API_KEY",
+  "GROQ_API_KEY",
+  "XAI_API_KEY",
+  "COHERE_API_KEY",
+  "OPENROUTER_API_KEY",
+  "HF_TOKEN",
 ]);
 
 export class AgentManager {
@@ -164,8 +196,16 @@ export class AgentManager {
     }
 
     const userEnv = config.env ? JSON.parse(config.env) : {};
-    const rebeccaEnv = this.buildAgentEnv(config.roomId, participantId);
-    const env = { ...userEnv, ...rebeccaEnv };
+    const baseEnv = this.buildAgentEnv(config.roomId, participantId);
+    // userEnv can add or override general host vars, but REBECCA_* always
+    // reflects the actual room/participant/server and cannot be spoofed.
+    const env: Record<string, string> = { ...baseEnv, ...userEnv };
+    env.REBECCA_URL = this.serverUrl;
+    env.REBECCA_ROOM = config.roomId;
+    env.REBECCA_PARTICIPANT = participantId;
+    env.REBECCA_TOKEN = this.token;
+    // Also ensure our cli bin dir is on PATH
+    env.PATH = `${this.cliBinDir}:${env.PATH ?? ""}`;
     const [command, ...args] = parseCommand(config.runCommand);
 
     let runner: AgentRunner;
@@ -237,6 +277,7 @@ export class AgentManager {
     }
     await agent.runner.stop();
     this.agents.delete(participantId);
+    this.restartAttempts.delete(participantId);
     this.setStatus(participantId, "offline");
   }
 
@@ -262,6 +303,7 @@ export class AgentManager {
       .get();
 
     if (config && config.roomId === roomId) {
+      // UNIQUE (participant_id, message_id) enforces idempotency
       this.db
         .insert(schema.pendingMentions)
         .values({
@@ -269,6 +311,7 @@ export class AgentManager {
           roomId,
           messageId,
         })
+        .onConflictDoNothing()
         .run();
     }
 
@@ -370,15 +413,32 @@ export class AgentManager {
 
       const response = await agent.runner.invoke(context);
       if (response.text && response.text.trim()) {
+        // Atomically insert the response and delete the pending mention.
         await this.postMessage(
           roomId,
           agent.participantId,
           response.text.trim(),
           response.mentions,
+          {
+            clearPendingMention: {
+              participantId: agent.participantId,
+              messageId,
+            },
+          },
         );
+      } else {
+        // No response text, but still clear the pending mention so we don't
+        // replay an empty invocation forever.
+        this.db
+          .delete(schema.pendingMentions)
+          .where(
+            and(
+              eq(schema.pendingMentions.participantId, agent.participantId),
+              eq(schema.pendingMentions.messageId, messageId),
+            ),
+          )
+          .run();
       }
-      // Mark the pending mention(s) for this message as delivered
-      this.markPendingDelivered(agent.participantId, messageId);
       // Reset persistent restart attempts on a successful invocation
       this.restartAttempts.delete(agent.participantId);
     } catch (err) {
@@ -388,20 +448,6 @@ export class AgentManager {
       );
       this.setStatus(agent.participantId, "error", String(err));
     }
-  }
-
-  private markPendingDelivered(participantId: string, messageId: string) {
-    const now = new Date().toISOString();
-    this.db
-      .update(schema.pendingMentions)
-      .set({ deliveredAt: now })
-      .where(
-        and(
-          eq(schema.pendingMentions.participantId, participantId),
-          eq(schema.pendingMentions.messageId, messageId),
-        ),
-      )
-      .run();
   }
 
   private handleUnexpectedExit(agent: RunningAgent) {
@@ -441,14 +487,9 @@ export class AgentManager {
     const pending = this.db
       .select()
       .from(schema.pendingMentions)
-      .where(
-        and(
-          eq(schema.pendingMentions.participantId, agent.participantId),
-        ),
-      )
+      .where(eq(schema.pendingMentions.participantId, agent.participantId))
       .orderBy(asc(schema.pendingMentions.createdAt))
-      .all()
-      .filter((r) => r.deliveredAt === null);
+      .all();
 
     if (pending.length === 0) return;
 

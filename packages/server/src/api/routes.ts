@@ -52,12 +52,20 @@ export function createRoutes(
     }
   };
 
+  interface PostOptions {
+    /** Atomically delete this pending mention when the message is inserted.
+     *  Used so agent responses and pending-mention cleanup can't be split
+     *  by a crash in between. */
+    clearPendingMention?: { participantId: string; messageId: string };
+  }
+
   // Internal post: used by both HTTP route and AgentManager
   async function postMessageInternal(
     roomId: string,
     senderId: string,
     text: string,
     mentions?: string[],
+    options?: PostOptions,
   ): Promise<void> {
     const msgId = crypto.randomUUID();
     const content = JSON.stringify([{ text }]);
@@ -72,7 +80,27 @@ export function createRoutes(
       createdAt: new Date().toISOString(),
     };
 
-    db.insert(schema.messages).values(message).run();
+    // Insert the message and clear the pending mention (if any) atomically.
+    transaction(() => {
+      db.insert(schema.messages).values(message).run();
+
+      if (options?.clearPendingMention) {
+        db.delete(schema.pendingMentions)
+          .where(
+            and(
+              eq(
+                schema.pendingMentions.participantId,
+                options.clearPendingMention.participantId,
+              ),
+              eq(
+                schema.pendingMentions.messageId,
+                options.clearPendingMention.messageId,
+              ),
+            ),
+          )
+          .run();
+      }
+    });
 
     const parsed = {
       id: message.id,
@@ -298,24 +326,28 @@ export function createRoutes(
       .get();
     if (!room) return c.json({ error: "Room not found" }, 404);
 
-    // Verify sender is a member of the room (system messages exempt)
-    if (body.senderId !== "system") {
-      const member = db
-        .select()
-        .from(schema.roomMembers)
-        .where(
-          and(
-            eq(schema.roomMembers.roomId, roomId),
-            eq(schema.roomMembers.participantId, body.senderId),
-          ),
-        )
-        .get();
-      if (!member) {
-        return c.json(
-          { error: `Sender ${body.senderId} is not a member of room ${roomId}` },
-          403,
-        );
-      }
+    // "system" is reserved for server-internal messages and cannot be used
+    // as a senderId from the public API.
+    if (body.senderId === "system") {
+      return c.json({ error: "senderId 'system' is reserved" }, 403);
+    }
+
+    // Verify sender is a member of the room
+    const member = db
+      .select()
+      .from(schema.roomMembers)
+      .where(
+        and(
+          eq(schema.roomMembers.roomId, roomId),
+          eq(schema.roomMembers.participantId, body.senderId),
+        ),
+      )
+      .get();
+    if (!member) {
+      return c.json(
+        { error: `Sender ${body.senderId} is not a member of room ${roomId}` },
+        403,
+      );
     }
 
     // Verify mentions are room members

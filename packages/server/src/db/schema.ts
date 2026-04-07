@@ -90,13 +90,9 @@ export const pendingMentions = sqliteTable(
     createdAt: text("created_at")
       .notNull()
       .$defaultFn(() => new Date().toISOString()),
-    deliveredAt: text("delivered_at"),
   },
   (table) => [
-    index("idx_pending_mentions_participant").on(
-      table.participantId,
-      table.deliveredAt,
-    ),
+    index("idx_pending_mentions_participant").on(table.participantId),
   ],
 );
 

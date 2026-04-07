@@ -94,7 +94,11 @@ server
       console.log(`Stopping server (pid: ${pid})...`);
     } catch (err: any) {
       if (err.code === "ESRCH") {
-        console.log("Server is not running (stale PID file).");
+        const { unlinkSync } = await import("node:fs");
+        try {
+          unlinkSync(pidPath);
+        } catch {}
+        console.log("Server was not running (stale PID file removed).");
         return;
       }
       console.error(`Failed to stop server: ${err.message}`);
@@ -295,6 +299,7 @@ program
         agent.type,
         runCommand,
         agent.cwd ?? process.cwd(),
+        agent.env,
       );
       if (!res.ok) {
         console.error(`  ${agent.name}: ${res.data?.error ?? res.status}`);

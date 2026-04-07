@@ -6,6 +6,31 @@ export async function connectCommand(roomId: string) {
   const participantId = `human/${process.env.USER ?? "user"}`;
   const participantName = process.env.USER ?? "user";
 
+  // Connect WebSocket FIRST so we don't miss participant events that occur
+  // between the room snapshot fetch and WS subscription.
+  const wsUrl = getWsUrl();
+  const sep = wsUrl.includes("?") ? "&" : "?";
+  const ws = new WebSocket(
+    `${wsUrl}${sep}participant=${encodeURIComponent(participantId)}`,
+  );
+
+  // Wait for WS to be open and subscribed before snapshotting
+  await new Promise<void>((resolve, reject) => {
+    ws.on("open", () => {
+      ws.send(JSON.stringify({ type: "subscribe", roomId }));
+    });
+    ws.on("message", (data) => {
+      try {
+        const event = JSON.parse(data.toString());
+        if (event.type === "subscribed" && event.roomId === roomId) {
+          resolve();
+        }
+      } catch {}
+    });
+    ws.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("WebSocket subscription timeout")), 10_000);
+  });
+
   // Join room
   const joinRes = await api.join(roomId, participantId, participantName, "human");
   if (!joinRes.ok) {
@@ -13,7 +38,7 @@ export async function connectCommand(roomId: string) {
     process.exit(1);
   }
 
-  // Get room info
+  // Get room info (may race with WS participant_joined events, handled in dedup)
   const roomRes = await api.getRoom(roomId);
   if (!roomRes.ok) {
     console.error(`Room not found: ${roomId}`);
@@ -54,17 +79,6 @@ export async function connectCommand(roomId: string) {
     }
   }
   console.log("---");
-
-  // Connect WebSocket for real-time updates
-  const wsUrl = getWsUrl();
-  const sep = wsUrl.includes("?") ? "&" : "?";
-  const ws = new WebSocket(
-    `${wsUrl}${sep}participant=${encodeURIComponent(participantId)}`,
-  );
-
-  ws.on("open", () => {
-    ws.send(JSON.stringify({ type: "subscribe", roomId }));
-  });
 
   // Live participant list — kept in sync via WebSocket events
   let participants: any[] = room.participants ?? [];

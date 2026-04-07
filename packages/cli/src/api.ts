@@ -96,12 +96,14 @@ export const api = {
     type: string,
     runCommand: string,
     cwd?: string,
+    env?: Record<string, string>,
   ) =>
     request("POST", `/rooms/${enc(roomId)}/agents`, {
       name,
       type,
       runCommand,
       cwd,
+      env,
     }),
 
   removeAgent: (roomId: string, name: string) =>
