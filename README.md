@@ -60,14 +60,18 @@ Rebecca is communication infrastructure for multi-agent collaboration. It does n
 
 ## Status
 
-Early development. Phases 0–8 of the implementation plan are complete:
+Early development. Phases 0–9 of the implementation plan are complete:
 
 - ✅ Core protocol (Room, Participant, Message, Task)
-- ✅ Persistent SQLite-backed server with HTTP + WebSocket
+- ✅ Persistent SQLite-backed server with HTTP + WebSocket + bearer token auth
 - ✅ CLI for humans and programmatic access
 - ✅ Built-in Claude Code and Codex agent types
-- ✅ @mention routing with quick-question and task workflows
-- ✅ Custom agent support via CLI
+- ✅ @mention routing with sender/membership validation and pending-mention recovery
+- ✅ `/btw` quick mode enforced at the runner boundary (separate subprocess with no tools / read-only sandbox)
+- ✅ Task tracking via the same `rebecca` CLI that humans use (no fragile output markers)
+- ✅ `rebecca.yaml` for project-level config
+- ✅ Custom agent support via CLI (50-line bash example included)
+- ✅ Two rounds of Codex review with all critical and major findings addressed
 
 ## Build
 

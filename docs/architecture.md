@@ -207,12 +207,17 @@ Each message has a mode, controlled by a slash prefix at the start:
 | Syntax | Mode | Constraints |
 |---|---|---|
 | `@agent ...` | full | Tools allowed, multi-turn, may create tasks |
-| `/btw @agent ...` | quick | No tools, single short response, answer from context |
+| `/btw @agent ...` | quick | No tools, isolated session, answer from context |
 | `/q @agent ...` | quick | Alias for `/btw` |
 
-The mode is parsed from the message text in the CLI: if the message starts with `/btw` or `/q`, the prefix is stripped and `mode=quick` is set on the message. All agents mentioned in a quick message dispatch in quick mode.
+The mode is parsed in the CLI: if the message starts with `/btw` or `/q`, the prefix is stripped and `mode=quick` is set on the message. All agents mentioned in a quick message dispatch in quick mode.
 
-The mode is enforced via the agent's system prompt (no tools, no @mention chains, one short response). For agents spawned as long-lived processes (Claude Code, Codex resume) the constraint is prompt-only — the model can still ignore it. Stronger enforcement (per-call flag overrides, separate quick subprocess) is a future refinement.
+**Quick mode is enforced at the runner boundary**, not just via prompt:
+
+- **Claude Code**: a separate one-shot subprocess is spawned with `--tools ""` (no tools at all). The quick subprocess does not share state with the long-lived process. After producing one response it is killed. 90s hard timeout.
+- **Codex**: a fresh `codex exec --json --ephemeral --sandbox read-only` process is spawned without thread resume. The read-only sandbox prevents file modification; the ephemeral flag prevents session state pollution. The full-mode `threadId` is never updated by quick runs.
+
+This means even if the model ignores the system prompt instruction "do not use tools," the framework provides nothing for it to call. Quick mode can only return text from context.
 
 This pattern is inspired by Claude Code's `/btw` (by the way) command for fire-and-forget side questions.
 

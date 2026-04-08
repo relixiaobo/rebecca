@@ -867,20 +867,23 @@ In Rebecca's current model, every @mention triggers a full agent invocation. Cla
 
 `/btw` validates a key principle: **multi-agent systems benefit from differentiating invocation weight**. Not every interaction is a full task.
 
-### Design Decision: Quick vs Full Mentions
+### Design Decision: Quick Mode via `/btw` Prefix
 
-Rebecca adopts the `?` suffix on @mentions to signal quick mode:
+Rebecca uses `/btw` (or the alias `/q`) at the start of a message to signal quick mode for the entire message. All agents mentioned in a quick message dispatch in quick mode.
 
-- `@agent` → full invocation, tools allowed, may create tasks
-- `@agent?` → quick query, no tools, single turn, answer from context
+```
+@agent ...           → full invocation, tools allowed, may create tasks
+/btw @agent ...      → quick query, no tools, isolated session, answer from context
+```
 
-The constraint must be enforced at the **connector level** (not just system prompt), because models are unreliable about following "be quick" instructions:
+**Earlier attempt**: per-mention `@agent?` suffix. Rejected because the `?` is visually similar to normal punctuation, conflicts with question marks in natural language, and per-mention granularity adds complexity nobody actually wants. Mixing quick and full mentions in one message is rare and fragile; better to send two messages.
 
-- Claude Code: pass `--max-turns 1` and restrict allowed tools
-- Codex: similar restrictions via flags
-- Pi (when implemented): set `maxTurns` and disable tools in session config
+**The constraint is enforced at the runner boundary, not just via prompt**:
 
-This is deferred until after Phase 5 (Codex support). It's a refinement, not a blocker.
+- **Claude Code**: spawns a separate one-shot subprocess with `--tools ""`. The model literally has no tools to call. Independent of the long-lived process.
+- **Codex**: uses `--ephemeral --sandbox read-only` with no thread resume. Read-only sandbox blocks file modifications; ephemeral keeps the long-lived session uncontaminated.
+
+This was originally listed as a refinement and deferred. After two rounds of Codex review flagged that prompt-only enforcement was insufficient (models can ignore "don't use tools" instructions), the runner-level enforcement was implemented as part of Phase 9. Verified by testing: a `/btw` question that would normally require bash returns "I can't access the filesystem for a quick mention" instead of running the command.
 
 ### Other Patterns Worth Borrowing
 

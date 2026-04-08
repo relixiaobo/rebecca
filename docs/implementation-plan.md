@@ -107,19 +107,30 @@ Clean up the API for developers who want to build custom agents.
 
 **Goal**: A developer can write a custom Room agent in any language.
 
-## Phase 9: Quick Invocation Mode (`@agent?`)
+## Phase 9: Quick Invocation Mode (`/btw`)
 
 Inspired by Claude Code's `/btw`. Differentiate quick questions from full tasks.
 
-- [ ] Parse `@agent?` syntax (with `?` suffix) in message text
-- [ ] Pass `quick: true` flag through the handleMention pipeline
-- [ ] AgentRunner.invoke() accepts a mode parameter
-- [ ] Claude Code: in quick mode, restrict tools and limit to single turn
-- [ ] Codex: similar restrictions in quick mode
-- [ ] System prompt addition: "this is a quick question, answer from context only"
-- [ ] Test: `@agent?` returns fast (under 5s for trivial questions)
+- [x] Detect `/btw` (and `/q` alias) prefix in message text — CLI strips it and sets mode
+- [x] Add `mode` column to messages table; thread it through the pipeline
+- [x] handleMention takes a mode parameter; queue items carry mode
+- [x] AgentContext exposes mode to runners
+- [x] System prompt branches on mode: quick mode tells the agent "no tools, no @mentions, one short response"
+- [x] **Claude Code**: quick mode spawns a separate one-shot subprocess with `--tools ""`. No tools available at the framework level.
+- [x] **Codex**: quick mode uses `--ephemeral --sandbox read-only` and does not resume thread.
+- [x] Mention regex requires word boundary so `foo@bar.com` no longer matches
+- [x] Tested: `/btw @agent count files` correctly returns "I can't access the filesystem" instead of running bash
 
-**Goal**: Quick clarifications and lookups without spinning up full agent capabilities.
+**Goal**: Quick clarifications and lookups without spinning up full agent capabilities. **Done.**
+
+### Originally explored alternative: `@agent?` suffix
+
+The first attempt used `@agent?` with the `?` as a per-mention quick marker. Rejected because:
+- The `?` is visually similar to natural punctuation and easy to miss.
+- It conflicts with question marks in normal sentences.
+- Per-mention granularity (some mentions quick, others full in the same message) is rarely useful and adds complexity.
+
+Replaced with `/btw` prefix that marks the entire message as quick. All mentions in a quick message dispatch in quick mode. If you need both quick and full mentions, send two messages.
 
 ## Future (Not Planned Yet)
 
