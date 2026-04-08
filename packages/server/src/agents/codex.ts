@@ -52,7 +52,7 @@ export class CodexRunner implements AgentRunner {
     }
 
     const prompt = buildPrompt(context);
-    const result = await this.exec(prompt);
+    const result = await this.exec(prompt, context.mode);
 
     const mentions = parseMentions(
       result.text,
@@ -75,17 +75,35 @@ export class CodexRunner implements AgentRunner {
     return !this.stopRequested;
   }
 
-  private exec(prompt: string): Promise<{ text: string }> {
+  private exec(
+    prompt: string,
+    mode: "full" | "quick" = "full",
+  ): Promise<{ text: string }> {
     return new Promise((resolve, reject) => {
       const args: string[] = [];
-      const baseArgs = this.config.args.length
-        ? this.config.args
-        : ["exec", "--json", "--full-auto", "--skip-git-repo-check"];
 
-      if (this.threadId) {
-        args.push(...injectResumeArgs(baseArgs, this.threadId));
+      if (mode === "quick") {
+        // Quick mode: fresh ephemeral process, read-only sandbox.
+        // No thread resume — quick questions don't pollute the agent's
+        // long-term session.
+        args.push(
+          "exec",
+          "--json",
+          "--ephemeral",
+          "--skip-git-repo-check",
+          "--sandbox",
+          "read-only",
+        );
       } else {
-        args.push(...baseArgs);
+        const baseArgs = this.config.args.length
+          ? this.config.args
+          : ["exec", "--json", "--full-auto", "--skip-git-repo-check"];
+
+        if (this.threadId) {
+          args.push(...injectResumeArgs(baseArgs, this.threadId));
+        } else {
+          args.push(...baseArgs);
+        }
       }
 
       args.push(prompt);
@@ -191,10 +209,14 @@ export class CodexRunner implements AgentRunner {
           return;
         }
 
-        // Extract thread ID
-        const threadEvent = events.find((e) => e.type === "thread.started");
-        if (threadEvent && "thread_id" in threadEvent) {
-          this.threadId = threadEvent.thread_id as string;
+        // Extract thread ID — but only persist it for full-mode runs.
+        // Quick mode is ephemeral by design and must not pollute the agent's
+        // long-running session continuity.
+        if (mode === "full") {
+          const threadEvent = events.find((e) => e.type === "thread.started");
+          if (threadEvent && "thread_id" in threadEvent) {
+            this.threadId = threadEvent.thread_id as string;
+          }
         }
 
         // Extract last agent message

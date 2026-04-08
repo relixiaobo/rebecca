@@ -73,6 +73,14 @@ export class ClaudeCodeRunner implements AgentRunner {
   }
 
   async invoke(context: AgentContext): Promise<AgentResponse> {
+    if (context.mode === "quick") {
+      return this.invokeQuick(context);
+    }
+    return this.invokeFull(context);
+  }
+
+  /** Full mode: send to the long-lived subprocess */
+  private async invokeFull(context: AgentContext): Promise<AgentResponse> {
     if (!this.process?.stdin?.writable) {
       throw new Error("Claude Code process not available");
     }
@@ -95,6 +103,114 @@ export class ClaudeCodeRunner implements AgentRunner {
     const mentions = parseMentions(text, context.otherParticipants, context.participantId);
 
     return { text: text.trim(), mentions };
+  }
+
+  /**
+   * Quick mode: spawn a separate one-shot subprocess with --tools "" so the
+   * model has no tools available. This enforces the constraint at the runner
+   * boundary, not just via prompt.
+   */
+  private async invokeQuick(context: AgentContext): Promise<AgentResponse> {
+    return new Promise((resolve, reject) => {
+      const prompt = buildPrompt(context);
+      const args = [
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--tools",
+        "", // disable ALL tools
+      ];
+
+      const proc = spawn(this.config.command, args, {
+        cwd: this.config.cwd ?? process.cwd(),
+        stdio: ["pipe", "pipe", "pipe"],
+        env: this.config.env ?? { ...process.env },
+      });
+
+      let buffer = "";
+      let settled = false;
+      const stderrChunks: string[] = [];
+
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        try {
+          proc.kill();
+        } catch {}
+        fn();
+      };
+
+      // Quick mode should be fast — 90s hard cap
+      const timeout = setTimeout(() => {
+        settle(() =>
+          reject(new Error("Claude Code quick invocation timed out (90s)")),
+        );
+      }, 90_000);
+
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed);
+            if (event.type === "result") {
+              const text = (event.result as string) ?? "";
+              const mentions = parseMentions(
+                text,
+                context.otherParticipants,
+                context.participantId,
+              );
+              settle(() => resolve({ text: text.trim(), mentions }));
+              return;
+            }
+          } catch {
+            // ignore non-JSON
+          }
+        }
+      });
+
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderrChunks.push(text);
+        const trimmed = text.trim();
+        if (trimmed) {
+          console.error(`[claude-code quick stderr] ${trimmed}`);
+        }
+      });
+
+      proc.on("error", (err) => {
+        settle(() => reject(err));
+      });
+
+      proc.on("exit", (code) => {
+        if (!settled) {
+          const errMsg =
+            stderrChunks.join("").slice(-500) ||
+            `quick process exited with code ${code} before producing a result`;
+          settle(() => reject(new Error(errMsg)));
+        }
+      });
+
+      // Send the prompt and close stdin so the process knows there's no more input
+      const input = JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: prompt,
+        },
+        parent_tool_use_id: null,
+        session_id: "",
+      });
+      proc.stdin?.write(input + "\n");
+      proc.stdin?.end();
+    });
   }
 
   async stop() {
